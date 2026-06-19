@@ -59,13 +59,13 @@ seqpos = defaultdict(int)
 
 stem_abs = os.path.abspath(STEM).replace("\\", "/")
 lines = ["// per-occurrence real-audio engine — each region plays a real chunk of the stem",
-         # no one_shot: note plays for its (contiguous) duration, then the release fade
-         # crossfades into the next note's attack -> seamless transitions, no cut-off pop
-         "<global> ampeg_attack=0.006 ampeg_release=0.09"]
+         # NO end= (it hard-stops -> pop). The note duration + release fade control playback,
+         # so the outgoing chunk fades through its boundary into the next = real crossfade.
+         "<global> ampeg_attack=0.006 ampeg_release=0.12"]
 for off, end, p in occ:
     seqpos[p] += 1
-    lines.append("<region> sample=%s lokey=%d hikey=%d pitch_keycenter=%d offset=%d end=%d seq_length=%d seq_position=%d"
-                 % (stem_abs, p, p, p, off, end, totals[p], seqpos[p]))
+    lines.append("<region> sample=%s lokey=%d hikey=%d pitch_keycenter=%d offset=%d seq_length=%d seq_position=%d"
+                 % (stem_abs, p, p, p, off, totals[p], seqpos[p]))
 sfz = os.path.join(OUTDIR, PREFIX + ".sfz")
 open(sfz, "w").write("\n".join(lines))
 
