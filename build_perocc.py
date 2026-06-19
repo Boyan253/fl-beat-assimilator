@@ -59,7 +59,9 @@ seqpos = defaultdict(int)
 
 stem_abs = os.path.abspath(STEM).replace("\\", "/")
 lines = ["// per-occurrence real-audio engine — each region plays a real chunk of the stem",
-         "<global> loop_mode=one_shot ampeg_attack=0.004 ampeg_release=0.05"]
+         # no one_shot: note plays for its (contiguous) duration, then the release fade
+         # crossfades into the next note's attack -> seamless transitions, no cut-off pop
+         "<global> ampeg_attack=0.006 ampeg_release=0.09"]
 for off, end, p in occ:
     seqpos[p] += 1
     lines.append("<region> sample=%s lokey=%d hikey=%d pitch_keycenter=%d offset=%d end=%d seq_length=%d seq_position=%d"
