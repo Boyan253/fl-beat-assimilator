@@ -52,28 +52,42 @@ onset_samp = [snap(int(s * SR)) for (s, e, p, a) in clean]
 end_samp = onset_samp[1:] + [int(DUR * SR)]
 occ = [(onset_samp[i], end_samp[i], clean[i][2]) for i in range(len(clean))]
 
-totals = defaultdict(int)
-for off, end, p in occ:
-    totals[p] += 1
-seqpos = defaultdict(int)
-
 stem_abs = os.path.abspath(STEM).replace("\\", "/")
-lines = ["// per-occurrence real-audio engine — each region plays a real chunk of the stem",
-         # NO end= (it hard-stops -> pop). The note duration + release fade control playback,
-         # so the outgoing chunk fades through its boundary into the next = real crossfade.
-         "<global> ampeg_attack=0.006 ampeg_release=0.12"]
+# VELOCITY-LAYER selection (RESTART-SAFE). Round-robin (seq_position) keeps a global cycle
+# counter that does NOT reset on transport stop -> after a pause+restart the chunks play out
+# of order ("sounds bad and different"). Instead, give every occurrence a UNIQUE velocity on
+# its key, so note-P-at-velocity-N ALWAYS plays the same chunk no matter where playback starts.
+# amp_veltrack=0 -> velocity only SELECTS the chunk, it never changes the volume.
+lines = ["// per-occurrence real-audio engine — velocity-layer selection (deterministic / restart-safe)",
+         "<global> ampeg_attack=0.006 ampeg_release=0.12 amp_veltrack=0"]
+used = defaultdict(set)   # key -> velocities already taken
+slots = []                # (key, vel) per occurrence, parallel to occ / clean
 for off, end, p in occ:
-    seqpos[p] += 1
-    lines.append("<region> sample=%s lokey=%d hikey=%d pitch_keycenter=%d offset=%d seq_length=%d seq_position=%d"
-                 % (stem_abs, p, p, p, off, totals[p], seqpos[p]))
+    key = max(0, min(127, p))
+    if len(used[key]) >= 127:                      # pitch overflow (>127 hits): spill to nearest free key
+        for d in range(1, 128):
+            cand = [k for k in (key - d, key + d) if 0 <= k <= 127 and len(used[k]) < 127]
+            if cand:
+                key = cand[0]; break
+    v = 1
+    while v in used[key]:
+        v += 1
+    used[key].add(v); slots.append((key, v))
+    lines.append("<region> sample=%s lokey=%d hikey=%d pitch_keycenter=%d lovel=%d hivel=%d offset=%d"
+                 % (stem_abs, key, key, key, v, v, off))
 sfz = os.path.join(OUTDIR, PREFIX + ".sfz")
 open(sfz, "w").write("\n".join(lines))
 
 pm = pretty_midi.PrettyMIDI(); inst = pretty_midi.Instrument(program=0)
 for i, (s, e, p, a) in enumerate(clean):
     nxt = clean[i + 1][0] if i + 1 < len(clean) else DUR
-    inst.notes.append(pretty_midi.Note(velocity=100, pitch=max(0, min(127, p)), start=s, end=max(s + 0.05, nxt)))
+    key, v = slots[i]
+    inst.notes.append(pretty_midi.Note(velocity=v, pitch=key, start=s, end=max(s + 0.05, nxt)))
 pm.instruments.append(inst); pm.write(os.path.join(OUTDIR, PREFIX + ".mid"))
+
+spilled = sum(1 for i, (k, v) in enumerate(slots) if k != max(0, min(127, occ[i][2])))
+maxper = max((len(s) for s in used.values()), default=0)
+print("velocity-layer map: %d occurrences, max %d on one key, %d spilled to neighbour keys" % (len(slots), maxper, spilled))
 
 print("occurrences: %d  (raw %d -> thinned %d)" % (len(occ), len(ev), len(clean)))
 print("SFZ:", sfz)
