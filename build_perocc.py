@@ -79,6 +79,10 @@ sfz = os.path.join(OUTDIR, PREFIX + ".sfz")
 open(sfz, "w").write("\n".join(lines))
 
 pm = pretty_midi.PrettyMIDI(); inst = pretty_midi.Instrument(program=0)
+# silent t=0 anchor: key 0 has no region -> makes no sound, but forces the clip's origin to 0
+# so a late-entering layer (e.g. bass first hits at ~5.4s) stays time-locked to the melody
+# instead of FL stripping its leading silence and sliding it out of alignment.
+inst.notes.append(pretty_midi.Note(velocity=1, pitch=0, start=0.0, end=0.02))
 for i, (s, e, p, a) in enumerate(clean):
     nxt = clean[i + 1][0] if i + 1 < len(clean) else DUR
     key, v = slots[i]
