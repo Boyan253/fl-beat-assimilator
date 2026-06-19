@@ -1,0 +1,16 @@
+# heavy / generated — never track
+env/
+out/
+pipcache/
+torchcache/
+hf/
+tmp/
+__pycache__/
+*.log
+*.wav
+*.sf2
+*.sfz
+*.mid
+*.flp
+*.png
+*.csv
