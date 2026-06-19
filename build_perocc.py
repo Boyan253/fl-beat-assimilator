@@ -10,7 +10,7 @@ editing); round-robin handles repeated pitches. Output = SFZ (load in sfizz) + M
 import os, sys, warnings
 from collections import defaultdict
 warnings.filterwarnings("ignore")
-import soundfile as sf, pretty_midi
+import numpy as np, soundfile as sf, pretty_midi
 from basic_pitch.inference import predict
 from basic_pitch import ICASSP_2022_MODEL_PATH
 
@@ -37,32 +37,40 @@ for s, e, p, a in ev:
     else:
         clean.append((s, e, p, a))
 
-# contiguous chunks: chunk_i spans onset_i -> onset_{i+1} (so playing them back in order
-# reconstructs the real audio seamlessly — no gaps, no re-triggered attacks)
-occ = []
-for i, (s, e, p, a) in enumerate(clean):
-    nxt = clean[i + 1][0] if i + 1 < len(clean) else DUR
-    occ.append((s, nxt, p))
+# snap each chunk boundary to a zero-crossing so chunks start/end at amplitude 0 -> no pops.
+# boundary[i] is shared as end of chunk i-1 and start of chunk i, keeping them contiguous.
+ya, _sr = sf.read(STEM, always_2d=False)
+mono = ya.mean(axis=1) if getattr(ya, "ndim", 1) > 1 else ya
+zc = np.where(np.diff(np.signbit(mono)))[0]
+
+
+def snap(samp):
+    return int(zc[np.argmin(np.abs(zc - samp))]) if len(zc) else int(samp)
+
+
+onset_samp = [snap(int(s * SR)) for (s, e, p, a) in clean]
+end_samp = onset_samp[1:] + [int(DUR * SR)]
+occ = [(onset_samp[i], end_samp[i], clean[i][2]) for i in range(len(clean))]
 
 totals = defaultdict(int)
-for s, e, p in occ:
+for off, end, p in occ:
     totals[p] += 1
 seqpos = defaultdict(int)
 
 stem_abs = os.path.abspath(STEM).replace("\\", "/")
 lines = ["// per-occurrence real-audio engine — each region plays a real chunk of the stem",
-         "<global> loop_mode=one_shot ampeg_release=0.05"]
-for s, e, p in occ:
+         "<global> loop_mode=one_shot ampeg_attack=0.004 ampeg_release=0.05"]
+for off, end, p in occ:
     seqpos[p] += 1
-    off = int(s * SR); end = int(e * SR)
     lines.append("<region> sample=%s lokey=%d hikey=%d pitch_keycenter=%d offset=%d end=%d seq_length=%d seq_position=%d"
                  % (stem_abs, p, p, p, off, end, totals[p], seqpos[p]))
 sfz = os.path.join(OUTDIR, PREFIX + ".sfz")
 open(sfz, "w").write("\n".join(lines))
 
 pm = pretty_midi.PrettyMIDI(); inst = pretty_midi.Instrument(program=0)
-for s, e, p in occ:
-    inst.notes.append(pretty_midi.Note(velocity=100, pitch=max(0, min(127, p)), start=s, end=max(s + 0.05, e)))
+for i, (s, e, p, a) in enumerate(clean):
+    nxt = clean[i + 1][0] if i + 1 < len(clean) else DUR
+    inst.notes.append(pretty_midi.Note(velocity=100, pitch=max(0, min(127, p)), start=s, end=max(s + 0.05, nxt)))
 pm.instruments.append(inst); pm.write(os.path.join(OUTDIR, PREFIX + ".mid"))
 
 print("occurrences: %d  (raw %d -> thinned %d)" % (len(occ), len(ev), len(clean)))
