@@ -1,0 +1,16 @@
+# Core pipeline (assimilate + create). Python 3.11.
+numpy
+scipy
+soundfile
+librosa
+pretty_midi
+demucs
+basic-pitch
+sf2utils
+
+# torch / torchaudio: install PER-PLATFORM, not from here:
+#   NVIDIA / CPU : pip install torch torchaudio
+#   AMD 7900 XTX : install the ROCm build (ROCm via WSL2/Linux) — see HANDOFF.md
+#
+# ML phase (fine-tuning a symbolic MIDI model — not yet used):
+#   miditok transformers datasets accelerate
