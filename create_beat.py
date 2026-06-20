@@ -32,34 +32,34 @@ def sdeg(d):                                   # scale degree -> semitones (octa
     return SCALE[d % 7] + 12 * (d // 7)
 
 
+PENT = [0, 3, 5, 7, 10, 12]                    # minor pentatonic (semitones) — the phonk sound
+# one catchy 2-bar cowbell riff (step, len, semitone-from-root) — a real HOOK that repeats
+RIFF = [(0, 2, 0), (2, 2, 0), (4, 2, 12), (6, 2, 10), (8, 2, 7), (10, 2, 7), (12, 2, 3), (14, 2, 0),
+        (16, 2, 0), (18, 2, 3), (20, 2, 5), (22, 2, 7), (24, 2, 10), (26, 2, 12), (28, 4, 7)]
+
+
 def melody():
-    rhythm = [(0, 2), (2, 1), (3, 1), (4, 2), (7, 1), (8, 2), (10, 1), (11, 1), (12, 2), (14, 2)]
     out = []
-    prev = 0
-    for bar in range(BARS):
-        deg0 = PROG[bar % 4]
-        tones = [deg0, deg0 + 2, deg0 + 4, deg0 + 7]      # triad + octave
-        t0 = bar * barlen
-        for s, ln in rhythm:
-            if random.random() < 0.72:
-                d = random.choice(tones)
-            else:
-                d = prev + random.choice([-1, 1])         # passing tone
-            prev = d
-            p = max(48, min(86, ROOT_MEL + sdeg(d)))
+    for blk in range(max(1, BARS // 2)):           # repeat the riff every 2 bars, transposed by the prog
+        off = sdeg(PROG[blk % 4])
+        t0 = blk * 2 * barlen
+        for s, ln, semi in RIFF:
+            p = max(48, min(88, ROOT_MEL + off + semi))
             st = t0 + s * step
-            out.append((st, st + ln * step * 0.95, p, random.randint(84, 112)))
+            out.append((st, st + ln * step * 0.9, p, 112 if semi == 0 else 95))   # accent the root
     return out
 
 
 def bass():
     out = []
-    for bar in range(BARS):
-        p = ROOT_BASS + sdeg(PROG[bar % 4])
-        t0 = bar * barlen
-        for s, ln in [(0, 6), (6, 2), (8, 4), (12, 3)]:   # 808 root holds + accents
-            st = t0 + s * step
-            out.append((st, st + ln * step * 0.98, p, 116))
+    for blk in range(max(1, BARS // 2)):
+        p = ROOT_BASS + sdeg(PROG[blk % 4])
+        t0 = blk * 2 * barlen
+        for bar in range(2):
+            tb = t0 + bar * barlen
+            for s, ln in [(0, 6), (6, 2), (8, 4), (12, 3)]:   # 808 root holds + accents, follows the riff
+                st = tb + s * step
+                out.append((st, st + ln * step * 0.98, p, 116))
     return out
 
 
