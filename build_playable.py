@@ -10,7 +10,7 @@ pitch-shifted) and velocity = LOUDNESS (normal). Load it in Sforzando and perfor
 import os, sys, warnings
 from collections import defaultdict
 warnings.filterwarnings("ignore")
-import numpy as np, soundfile as sf
+import numpy as np, soundfile as sf, pretty_midi
 from basic_pitch.inference import predict
 from basic_pitch import ICASSP_2022_MODEL_PATH
 
@@ -70,3 +70,18 @@ sfz = os.path.join(OUTDIR, PREFIX + "_playable.sfz")
 open(sfz, "w").write("\n".join(lines))
 print("PLAYABLE: %d sampled pitches, full keyboard filled -> %s" % (len(pitches), sfz))
 print("samples in:", SAMPDIR)
+
+# companion MIDI: a TRUE musical transcription (real pitch / timing / loudness) that
+# replicates the original beat when played THROUGH this playable instrument, and is fully
+# editable as real notes. velocity = loudness (amplitude normalised to the velocity range).
+pm = pretty_midi.PrettyMIDI(); inst = pretty_midi.Instrument(program=0)
+inst.notes.append(pretty_midi.Note(velocity=1, pitch=0, start=0.0, end=0.02))   # silent t=0 anchor
+amax = max([a for s, e, p, a in ev if p in samples] or [1.0])
+for s, e, p, a in sorted(ev, key=lambda x: x[0]):
+    if p not in samples:
+        continue
+    vel = max(14, min(127, int(round(a / amax * 127))))
+    inst.notes.append(pretty_midi.Note(velocity=vel, pitch=p, start=s, end=max(s + 0.06, e)))
+pm.instruments.append(inst); pm.write(os.path.join(OUTDIR, PREFIX + "_playable.mid"))
+print("companion MIDI (replicates the beat through this instrument):",
+      os.path.join(OUTDIR, PREFIX + "_playable.mid"))
