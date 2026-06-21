@@ -1,72 +1,80 @@
-"""generate_phonk.py — generate original phonk riffs from the fine-tuned AMT model.
+"""generate_phonk.py — generate phonk riffs from the fine-tuned AMT model.
 
-Generates N MIDI riffs and saves them to GENERATED_DIR.
-Cherry-pick the ones that sound good -> import into FL Studio.
+Two modes:
+  from-scratch (default): generate with no prompt. More "original" but drifts toward
+      AMT's generic prior — can sound un-phonk.
+  prompt-continue (--prompt): seed the model with the first few seconds of a REAL phonk
+      MIDI from the training set, then let it CONTINUE in that style. Far more in-style.
+      NOTE: the prompt portion is borrowed from a copyrighted song — use --prompt only to
+      AUDITION the model's style. For sellable output use from-scratch (or strip the prompt).
 
-Run in WSL flbeat-venv:
-  source /root/flbeat-venv/bin/activate
-  python /mnt/d/flbeat/fl-beat-assimilator/generate_phonk.py [--count 10] [--seed 42]
+Run in WSL flbeat-venv (with the GPU stability env vars — see run_finetune.sh):
+  python generate_phonk.py [--count 10] [--seed 42] [--prompt] [--seconds 15]
 
-After generation, listen to each .mid in FL Studio (load any instrument).
-The best ones are the ones that sound melodic and not chaotic.
+After generation, render to MP3 with render_audio.py to preview without FL.
 """
-import os, argparse, warnings
+import os, glob, random, argparse, warnings
 warnings.filterwarnings("ignore")
 
 MODEL_DIR     = "/mnt/d/flbeat/data/models/phonk_amt"
 GENERATED_DIR = "/mnt/d/flbeat/data/generated"
+MIDI_DIR      = "/mnt/d/flbeat/data/midi"      # training MIDIs, used as style prompts
 BASE_MODEL    = "stanford-crfm/music-medium-800k"
 
-SECONDS        = 15     # length of each generated riff (AMT sampler is time-based)
-TOP_P          = 0.95   # nucleus sampling: creative but coherent
+SECONDS        = 15     # total length of each generated riff
+PROMPT_SECONDS = 4      # how many seconds of the seed phonk riff to prompt with
+TOP_P          = 0.90   # nucleus sampling: lower = less busy / chaotic
 
 
 def events_to_midi_file(events, out_path):
-    """Convert AMT event integers to a MIDI file."""
     from anticipation.convert import events_to_midi
-    mid = events_to_midi(events)
-    mid.save(out_path)
+    events_to_midi(events).save(out_path)
     return out_path
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--count", type=int, default=10, help="Number of riffs to generate")
-    parser.add_argument("--seed",  type=int, default=42,  help="Random seed")
+    parser.add_argument("--count",   type=int,   default=10)
+    parser.add_argument("--seed",    type=int,   default=42)
+    parser.add_argument("--prompt",  action="store_true", help="continue a real phonk seed (in-style)")
+    parser.add_argument("--seconds", type=int,   default=SECONDS)
+    parser.add_argument("--top-p",   type=float, default=TOP_P)
     args = parser.parse_args()
 
     os.makedirs(GENERATED_DIR, exist_ok=True)
 
     import torch
     from transformers import AutoModelForCausalLM
+    from anticipation.sample import generate as amt_generate
+    from anticipation.convert import midi_to_events, EVENT_SIZE
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    # Load fine-tuned model (fall back to base if fine-tune not ready)
-    if os.path.exists(os.path.join(MODEL_DIR, "config.json")):
-        model_path = MODEL_DIR
-        print(f"Loading fine-tuned model from {MODEL_DIR}...", flush=True)
-    else:
-        model_path = BASE_MODEL
-        print(f"Fine-tuned model not found — using base AMT ({BASE_MODEL})", flush=True)
-
+    model_path = MODEL_DIR if os.path.exists(os.path.join(MODEL_DIR, "config.json")) else BASE_MODEL
+    print(f"Loading model from {model_path}...", flush=True)
     # eager attention: sdpa/flash is experimental + unstable on Navi31 (RX 7900 XTX)
     model = AutoModelForCausalLM.from_pretrained(model_path, attn_implementation="eager")
     model.eval().to(device)
 
-    # AMT has its own autoregressive sampler — raw HF generate() does not produce valid
-    # event triples. sample.generate(model, 0, SECONDS, top_p) returns proper AMT events.
-    from anticipation.sample import generate as amt_generate
-    from anticipation.convert import EVENT_SIZE
-
+    seeds = sorted(glob.glob(os.path.join(MIDI_DIR, "*.mid"))) if args.prompt else []
+    rng = random.Random(args.seed)
     torch.manual_seed(args.seed)
+    tag = "cont" if args.prompt else "scratch"
     generated = []
 
     for i in range(args.count):
-        print(f"Generating riff {i+1}/{args.count}...", flush=True)
+        print(f"Generating riff {i+1}/{args.count} ({tag})...", flush=True)
         try:
-            events = amt_generate(model, 0, SECONDS, top_p=TOP_P)
+            if args.prompt and seeds:
+                seed_midi = rng.choice(seeds)
+                inputs = midi_to_events(seed_midi)
+                # prompt = events up to PROMPT_SECONDS, then continue to args.seconds
+                events = amt_generate(model, PROMPT_SECONDS, args.seconds,
+                                      inputs=inputs, top_p=args.top_p)
+                print(f"  seed: {os.path.basename(seed_midi)[:50]}", flush=True)
+            else:
+                events = amt_generate(model, 0, args.seconds, top_p=args.top_p)
         except Exception as e:
             print(f"  generation failed: {e}", flush=True)
             continue
@@ -75,7 +83,7 @@ def main():
             print(f"  skip: empty generation", flush=True)
             continue
 
-        out_path = os.path.join(GENERATED_DIR, f"riff_{args.seed}_{i+1:03d}.mid")
+        out_path = os.path.join(GENERATED_DIR, f"riff_{tag}_{args.seed}_{i+1:03d}.mid")
         try:
             events_to_midi_file(events, out_path)
             print(f"  saved: {os.path.basename(out_path)}  (~{len(events)//EVENT_SIZE} notes)", flush=True)
@@ -84,7 +92,7 @@ def main():
             print(f"  midi conversion failed: {e}", flush=True)
 
     print(f"\n=== Generated {len(generated)}/{args.count} riffs in {GENERATED_DIR} ===")
-    print("Import the .mid files into FL Studio and listen — pick the ones that sound good.")
+    print("Render to MP3:  python render_audio.py")
 
 
 if __name__ == "__main__":
