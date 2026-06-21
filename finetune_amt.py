@@ -13,14 +13,14 @@ Run in WSL flbeat-venv:
 import os, glob, warnings
 warnings.filterwarnings("ignore")
 
-MIDI_DIR   = "/mnt/d/flbeat/data/midi"
+MIDI_DIR   = "/mnt/d/flbeat/data/midi_mt"   # multi-track (melody+bass+drums); was /midi (melody only)
 MODEL_DIR  = "/mnt/d/flbeat/data/models/phonk_amt"
 BASE_MODEL = "stanford-crfm/music-medium-800k"
 
 SEQ_LEN     = 512    # shorter kernels = lighter sustained GPU load (RDNA3+ROCm+WSL TDR-crashes)
 STRIDE      = 256    # 50% overlap between windows
 MICRO_BATCH = 1      # sequences per step; eager attention's O(seq^2) maps OOM above 1 at seq 1024
-EPOCHS      = 1      # RDNA3+ROCm+WSL is unstable under long sustained load; 1 epoch + checkpoints
+EPOCHS      = 3      # multi-track corpus is ~3x the tokens, so fewer epochs cover it
 LR          = 1e-5
 CKPT_EVERY  = 200    # save a recoverable checkpoint every N steps (GPU can TDR-reset mid-run)
 

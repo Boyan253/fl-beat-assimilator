@@ -18,12 +18,16 @@ warnings.filterwarnings("ignore")
 
 MODEL_DIR     = "/mnt/d/flbeat/data/models/phonk_amt"
 GENERATED_DIR = "/mnt/d/flbeat/data/generated"
-MIDI_DIR      = "/mnt/d/flbeat/data/midi"      # training MIDIs, used as style prompts
+MIDI_DIR      = "/mnt/d/flbeat/data/midi_mt"   # multi-track training MIDIs used as style prompts
 BASE_MODEL    = "stanford-crfm/music-medium-800k"
 
-SECONDS        = 15     # total length of each generated riff
-PROMPT_SECONDS = 4      # how many seconds of the seed phonk riff to prompt with
-TOP_P          = 0.90   # nucleus sampling: lower = less busy / chaotic
+# The multi-track model won't cold-start; it needs a RICH prompt (the full beat, not just
+# the intro) to continue bass+drums+melody. We prompt with PROMPT_SECONDS of a real song,
+# generate to PROMPT_SECONDS+SECONDS, then STRIP the prompt so the saved riff is the model's
+# own original full arrangement (the seed only primes it, it's not in the output).
+PROMPT_SECONDS = 24     # seconds of seed context (must cover the full beat, not just intro)
+SECONDS        = 16     # seconds of ORIGINAL continuation to keep
+TOP_P          = 0.95   # nucleus sampling
 
 
 def events_to_midi_file(events, out_path):
@@ -47,6 +51,7 @@ def main():
     from transformers import AutoModelForCausalLM
     from anticipation.sample import generate as amt_generate
     from anticipation.convert import midi_to_events, EVENT_SIZE
+    from anticipation import ops
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
@@ -63,15 +68,22 @@ def main():
     tag = "cont" if args.prompt else "scratch"
     generated = []
 
+    end_time = PROMPT_SECONDS + args.seconds
     for i in range(args.count):
         print(f"Generating riff {i+1}/{args.count} ({tag})...", flush=True)
         try:
             if args.prompt and seeds:
                 seed_midi = rng.choice(seeds)
-                inputs = midi_to_events(seed_midi)
-                # prompt = events up to PROMPT_SECONDS, then continue to args.seconds
-                events = amt_generate(model, PROMPT_SECONDS, args.seconds,
-                                      inputs=inputs, top_p=args.top_p)
+                # Prompt with the full beat (PROMPT_SECONDS, not just the intro) so the model
+                # has bass+drums+melody context, generate the continuation, then STRIP the
+                # prompt so the saved riff is the model's OWN original arrangement.
+                inputs = ops.clip(midi_to_events(seed_midi), 0, PROMPT_SECONDS,
+                                  clip_duration=False, seconds=True)
+                full = amt_generate(model, PROMPT_SECONDS, end_time, inputs=inputs, top_p=args.top_p)
+                events = ops.clip(full, PROMPT_SECONDS, end_time, clip_duration=False, seconds=True)
+                # shift the kept events back to t=0 (remove the prompt's leading silence)
+                if events:
+                    events = ops.translate(events, -PROMPT_SECONDS, seconds=True)
                 print(f"  seed: {os.path.basename(seed_midi)[:50]}", flush=True)
             else:
                 events = amt_generate(model, 0, args.seconds, top_p=args.top_p)
