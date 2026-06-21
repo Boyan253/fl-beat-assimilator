@@ -17,9 +17,8 @@ MODEL_DIR     = "/mnt/d/flbeat/data/models/phonk_amt"
 GENERATED_DIR = "/mnt/d/flbeat/data/generated"
 BASE_MODEL    = "stanford-crfm/music-medium-800k"
 
-MAX_NEW_TOKENS = 1024   # ~30-60 notes per riff
-TEMPERATURE    = 0.92   # slightly below 1.0: creative but not chaotic
-TOP_P          = 0.95
+SECONDS        = 15     # length of each generated riff (AMT sampler is time-based)
+TOP_P          = 0.95   # nucleus sampling: creative but coherent
 
 
 def events_to_midi_file(events, out_path):
@@ -52,39 +51,34 @@ def main():
         model_path = BASE_MODEL
         print(f"Fine-tuned model not found — using base AMT ({BASE_MODEL})", flush=True)
 
-    model = AutoModelForCausalLM.from_pretrained(model_path)
+    # eager attention: sdpa/flash is experimental + unstable on Navi31 (RX 7900 XTX)
+    model = AutoModelForCausalLM.from_pretrained(model_path, attn_implementation="eager")
     model.eval().to(device)
+
+    # AMT has its own autoregressive sampler — raw HF generate() does not produce valid
+    # event triples. sample.generate(model, 0, SECONDS, top_p) returns proper AMT events.
+    from anticipation.sample import generate as amt_generate
+    from anticipation.convert import EVENT_SIZE
 
     torch.manual_seed(args.seed)
     generated = []
 
     for i in range(args.count):
         print(f"Generating riff {i+1}/{args.count}...", flush=True)
-        # Start from a single silence token (seed the generation)
-        input_ids = torch.tensor([[0]], dtype=torch.long, device=device)
-        with torch.no_grad():
-            out = model.generate(
-                input_ids,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=True,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-            )
-        tokens = out[0].tolist()
-        # AMT events are in groups of EVENT_SIZE=3; trim to multiple of 3
-        from anticipation.convert import EVENT_SIZE
-        trim = (len(tokens) // EVENT_SIZE) * EVENT_SIZE
-        events = tokens[:trim]
+        try:
+            events = amt_generate(model, 0, SECONDS, top_p=TOP_P)
+        except Exception as e:
+            print(f"  generation failed: {e}", flush=True)
+            continue
 
-        if len(events) < 6:
-            print(f"  skip: too short ({len(events)} tokens)", flush=True)
+        if not events or len(events) < EVENT_SIZE:
+            print(f"  skip: empty generation", flush=True)
             continue
 
         out_path = os.path.join(GENERATED_DIR, f"riff_{args.seed}_{i+1:03d}.mid")
         try:
             events_to_midi_file(events, out_path)
-            notes_approx = len(events) // EVENT_SIZE
-            print(f"  saved: {os.path.basename(out_path)}  (~{notes_approx} events)", flush=True)
+            print(f"  saved: {os.path.basename(out_path)}  (~{len(events)//EVENT_SIZE} notes)", flush=True)
             generated.append(out_path)
         except Exception as e:
             print(f"  midi conversion failed: {e}", flush=True)

@@ -17,12 +17,12 @@ MIDI_DIR   = "/mnt/d/flbeat/data/midi"
 MODEL_DIR  = "/mnt/d/flbeat/data/models/phonk_amt"
 BASE_MODEL = "stanford-crfm/music-medium-800k"
 
-SEQ_LEN    = 1024   # tokens per training sequence (kept small to fit 24GB w/ optimizer states)
-STRIDE     = 512    # 50% overlap between windows
-BATCH_SIZE = 1      # per-GPU batch; effective batch = BATCH_SIZE * GRAD_ACCUM
-GRAD_ACCUM = 8      # gradient accumulation -> effective batch 8 without the VRAM cost
-EPOCHS     = 3
-LR         = 1e-5
+SEQ_LEN     = 512    # shorter kernels = lighter sustained GPU load (RDNA3+ROCm+WSL TDR-crashes)
+STRIDE      = 256    # 50% overlap between windows
+MICRO_BATCH = 1      # sequences per step; eager attention's O(seq^2) maps OOM above 1 at seq 1024
+EPOCHS      = 1      # RDNA3+ROCm+WSL is unstable under long sustained load; 1 epoch + checkpoints
+LR          = 1e-5
+CKPT_EVERY  = 200    # save a recoverable checkpoint every N steps (GPU can TDR-reset mid-run)
 
 
 def resolve_model_path():
@@ -60,17 +60,9 @@ def midi_to_token_seq(path):
         return None
 
 
-class MidiCollator:
-    def __call__(self, features):
-        import torch
-        ids = torch.tensor([f["input_ids"] for f in features], dtype=torch.long)
-        return {"input_ids": ids, "labels": ids.clone()}
-
-
 def main():
     import torch
-    from transformers import AutoModelForCausalLM, Trainer, TrainingArguments
-    from datasets import Dataset
+    from transformers import AutoModelForCausalLM
 
     os.makedirs(MODEL_DIR, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -92,63 +84,62 @@ def main():
             ok += 1
     print(f"Loaded {ok}/{len(midi_files)} files.  Total tokens: {len(all_tokens):,}", flush=True)
 
-    # 2. Chunk into fixed-length sequences
+    # 2. Chunk into fixed-length sequences, hold out 10% for eval
     seqs = []
     for start in range(0, len(all_tokens) - SEQ_LEN, STRIDE):
         chunk = all_tokens[start: start + SEQ_LEN]
         if len(chunk) == SEQ_LEN:
-            seqs.append({"input_ids": chunk})
-    print(f"Training sequences: {len(seqs)}", flush=True)
+            seqs.append(chunk)
     if len(seqs) < 10:
         print("ERROR: too few sequences. Check that MIDI_DIR contains .mid files.")
         return
+    train_seqs = seqs
+    print(f"Train sequences: {len(train_seqs)}  (seq_len={SEQ_LEN})", flush=True)
 
-    # 3. Load base AMT model (from local safetensors to dodge the .bin CVE guard)
+    # 3. Load base AMT model (from local safetensors to dodge the .bin CVE guard).
+    # attn_implementation="eager" is REQUIRED: the default sdpa/flash-attention is
+    # experimental on Navi31 (RX 7900 XTX) and its backward pass produces NaN gradients.
     model_path = resolve_model_path()
     print(f"Loading {BASE_MODEL} from {model_path}...", flush=True)
-    model = AutoModelForCausalLM.from_pretrained(model_path)
-    model.to(device)
+    model = AutoModelForCausalLM.from_pretrained(model_path, attn_implementation="eager")
+    model.to(device).train()
     params = sum(p.numel() for p in model.parameters())
     print(f"  {params/1e6:.0f}M params", flush=True)
 
-    # 4. Dataset split
-    dataset = Dataset.from_list(seqs)
-    split   = dataset.train_test_split(test_size=0.1, seed=42)
-    train_ds, eval_ds = split["train"], split["test"]
-    print(f"Train: {len(train_ds)}  Eval: {len(eval_ds)}", flush=True)
+    # 4. Custom training loop — flat and minimal, mirroring the verified probe exactly
+    #    (HF Trainer diverged to NaN; generator/closure variants hung at step 0 on this
+    #    ROCm stack). Plain fp32 + AdamW + grad-clip, indexed loop, no generators.
+    import random
+    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
+    total_steps = len(train_seqs) * EPOCHS
+    warmup = 50
+    print(f"Starting fine-tune: {total_steps} steps", flush=True)
 
-    # 5. Train
-    model.gradient_checkpointing_enable()   # trade compute for memory
-    model.config.use_cache = False          # required with gradient checkpointing
+    step = 0
+    for epoch in range(EPOCHS):
+        order = list(range(len(train_seqs)))
+        random.Random(1234 + epoch).shuffle(order)
+        for idx in order:
+            ids = torch.tensor([train_seqs[idx]], dtype=torch.long, device=device)
+            lr = LR * min(1.0, (step + 1) / warmup)
+            for pg in opt.param_groups:
+                pg["lr"] = lr
+            opt.zero_grad()
+            loss = model(input_ids=ids, labels=ids).loss
+            loss.backward()
+            gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if torch.isfinite(loss) and torch.isfinite(gn):
+                opt.step()
+            else:
+                print(f"  !! non-finite at step {step} — skipped", flush=True)
+            if step < 5 or step % 50 == 0:
+                print(f"  epoch {epoch} step {step}/{total_steps}  loss={float(loss):.4f}  grad_norm={float(gn):.1f}  lr={lr:.2e}", flush=True)
+            step += 1
+            if step % CKPT_EVERY == 0:
+                model.save_pretrained(MODEL_DIR, safe_serialization=True)
+                print(f"  [checkpoint saved at step {step}]", flush=True)
 
-    args = TrainingArguments(
-        output_dir=MODEL_DIR,
-        num_train_epochs=EPOCHS,
-        per_device_train_batch_size=BATCH_SIZE,
-        per_device_eval_batch_size=BATCH_SIZE,
-        gradient_accumulation_steps=GRAD_ACCUM,
-        gradient_checkpointing=True,
-        learning_rate=LR,
-        warmup_steps=50,
-        weight_decay=0.01,
-        bf16=True,              # bf16 is more stable than fp16 on ROCm
-        optim="adafactor",      # Adafactor uses far less memory than Adam (no m/v states)
-        logging_steps=10,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        save_total_limit=2,
-        load_best_model_at_end=True,
-        report_to="none",
-        dataloader_num_workers=0,   # WSL multiprocessing can deadlock
-    )
-    trainer = Trainer(
-        model=model, args=args,
-        train_dataset=train_ds, eval_dataset=eval_ds,
-        data_collator=MidiCollator(),
-    )
-    print("Starting fine-tune...", flush=True)
-    trainer.train()
-    trainer.save_model(MODEL_DIR)
+    model.save_pretrained(MODEL_DIR, safe_serialization=True)
     print(f"Saved to {MODEL_DIR}", flush=True)
 
 

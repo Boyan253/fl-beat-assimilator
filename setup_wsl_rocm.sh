@@ -40,3 +40,17 @@ pip install --no-deps "git+https://github.com/jthickstun/anticipation.git" mido 
 #   m=AutoModelForCausalLM.from_pretrained(os.path.dirname(binp)).cuda()
 
 python -c "import torch;print('cuda',torch.cuda.is_available(),torch.cuda.get_device_name(0))"
+
+# 5) TRAINING/INFERENCE STABILITY ON RDNA3 (7900 XTX) + WSL — hard-won, do not skip:
+#  - attn_implementation="eager" when loading the model. The default sdpa/flash-attention
+#    is experimental on Navi31: its BACKWARD pass produces NaN gradients (training diverges).
+#  - Export these before any sustained GPU run, or the driver TDR-crashes after a few steps
+#    (process spins at ~200% CPU on a wedged GPU; AMD bug-report tool fires):
+#       export HSA_ENABLE_SDMA=0        # disable SDMA copy engine — the key WSL hang fix
+#       export GPU_MAX_HW_QUEUES=1      # single HW queue, less driver contention
+#       export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
+#  - Keep sequences short (<=512 tokens) so kernels stay well under the driver watchdog.
+#  - Use a plain fp32 + AdamW + grad-clip loop with a FLAT indexed loop (no generator/closure
+#    feeding batches — that hung at step 0). HF Trainer also diverged to NaN here.
+#  - Long autoregressive generation can still hit "HSA BlockAllocator::alloc failed" from VRAM
+#    fragmentation; generate ONE riff per fresh process to avoid cross-run degradation.
