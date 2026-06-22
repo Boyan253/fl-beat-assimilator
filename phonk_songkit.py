@@ -145,13 +145,32 @@ def main():
     scale = sorted(set(p + 12 * o for p in scale for o in (-1, 0, 1)))
 
     use_model = "--model" in sys.argv and os.path.exists(os.path.join(MELODY_MODEL, "config.json"))
-    print("melody source:", "MODEL" if use_model else "markov-variation", flush=True)
+    print("pitch source:", "MODEL" if use_model else "markov", "(rhythm = pack cowbell groove)", flush=True)
 
-    # 4 melody variations (transposed to chosen key)
+    # RHYTHM = the pack cowbell's note timings (real grid-locked phonk groove, with rests
+    # and repetition). PITCHES = from the model (or markov). This keeps the groove that
+    # works and only swaps the notes -> original melody that still sounds phonk.
+    rhythm = sorted(seed, key=lambda n: n.start)
+
+    def melody_on_rhythm(pitch_seq, offset):
+        if not pitch_seq:
+            pitch_seq = [n.pitch for n in rhythm]
+        out = []
+        for j, rn in enumerate(rhythm):
+            p = pitch_seq[(j + offset) % len(pitch_seq)]
+            p = min(scale, key=lambda s: abs(s - p))            # keep it in-scale
+            out.append(pretty_midi.Note(velocity=rn.velocity, pitch=int(p),
+                                        start=rn.start, end=rn.end))
+        return out
+
     melodies = []
     for i in range(4):
-        raw = model_melody(seed) if use_model else vary_melody(seed, scale)
-        m = transpose(raw, key)
+        if use_model:
+            mnotes = model_melody(seed)
+            pitch_seq = [n.pitch for n in sorted(mnotes, key=lambda n: n.start)]
+        else:
+            pitch_seq = [n.pitch for n in vary_melody(seed, scale)]
+        m = transpose(melody_on_rhythm(pitch_seq, i), key)
         melodies.append(m)
         save_midi(m, os.path.join(kit, f"melody_{i+1:02d}.mid"), program=30, name="cowbell")
 
