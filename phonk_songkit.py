@@ -21,6 +21,30 @@ from make_phonk_beat import PACK, SR, OUT_DIR, load, oneshot, base_pitch, vary_m
 
 TEMPO = 175.0
 BEAT  = 60.0 / TEMPO
+MELODY_MODEL = "/mnt/d/flbeat/data/models/phonk_amt_melody"
+MELODY_CORPUS = "/mnt/d/flbeat/data/melody_corpus"
+
+_MODEL = None
+def model_melody(seed_notes):
+    """Compose a NEW melody with the fine-tuned melody model: seed it with a clean
+    corpus melody, generate a continuation, strip the prompt -> original phonk line."""
+    global _MODEL
+    import torch
+    from transformers import AutoModelForCausalLM
+    from anticipation.sample import generate as amt_generate
+    from anticipation.convert import midi_to_events, events_to_midi
+    from anticipation import ops
+    if _MODEL is None:
+        _MODEL = AutoModelForCausalLM.from_pretrained(MELODY_MODEL, attn_implementation="eager").eval().cuda()
+    seed_mid = random.choice(glob.glob(os.path.join(MELODY_CORPUS, "*.mid")))
+    inp = ops.clip(midi_to_events(seed_mid), 0, 6, clip_duration=False, seconds=True)
+    full = amt_generate(_MODEL, 6, 22, inputs=inp, top_p=0.94)
+    gen = ops.clip(full, 6, 22, clip_duration=False, seconds=True)
+    if not gen:
+        return seed_notes
+    gen = ops.translate(gen, -6, seconds=True)
+    tmp = "/tmp/_mel.mid"; events_to_midi(gen).save(tmp)
+    return [n for i in pretty_midi.PrettyMIDI(tmp).instruments for n in i.notes]
 
 
 def save_midi(notes, path, program=0, is_drum=False, name=""):
@@ -120,10 +144,14 @@ def main():
     scale = sorted(set(n.pitch for n in seed))
     scale = sorted(set(p + 12 * o for p in scale for o in (-1, 0, 1)))
 
+    use_model = "--model" in sys.argv and os.path.exists(os.path.join(MELODY_MODEL, "config.json"))
+    print("melody source:", "MODEL" if use_model else "markov-variation", flush=True)
+
     # 4 melody variations (transposed to chosen key)
     melodies = []
     for i in range(4):
-        m = transpose(vary_melody(seed, scale), key)
+        raw = model_melody(seed) if use_model else vary_melody(seed, scale)
+        m = transpose(raw, key)
         melodies.append(m)
         save_midi(m, os.path.join(kit, f"melody_{i+1:02d}.mid"), program=30, name="cowbell")
 
