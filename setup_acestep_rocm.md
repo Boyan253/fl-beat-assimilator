@@ -34,3 +34,14 @@ use_flash_attention=False, use_mlx_dit=False) + LLMHandler(backend="pt") + gener
 inference_steps=8 (turbo), instrumental=True.
 
 ## Next: fine-tune on royalty-free phonk to specialize + make it "ours".
+
+## LoRA/LoKr fine-tuning on ROCm/WSL — additional fixes (verified 2026-06-23, training works)
+- Data: audio + <name>.lyrics.txt ("[Instrumental]") + <name>.json {caption,bpm,language}. ~15 tracks is enough.
+- ACE-Step path-safety guard hardwires the safe-root to the REPO dir -> dataset, tensors, and
+  output_dir MUST live under /mnt/d/flbeat/ACE-Step-1.5/ (copy data in).
+- MIOpen on WSL: VAE-encode convs fail ("Invalid elapsed time"/"no suitable algorithm"). Fix env:
+  MIOPEN_FIND_MODE=2  MIOPEN_DEBUG_CONV_IMMED_FALLBACK=1
+- LyCORIS bug: inject_lokr_into_dit() apply_to() leaves adapter params on CPU -> "cuda:0 and cpu".
+  PATCHED acestep/training/lokr_utils.py: after apply_to(), lycoris_net.to(decoder device).
+- Headless trainer: train_phonk_lokr.py (DatasetBuilder.scan_directory -> preprocess_to_tensors
+  -> LoKRTrainer.train_from_preprocessed). LoKr ~16.5s/epoch, loss ~0.04. Adapter -> lora_phonk_out.
