@@ -17,6 +17,7 @@ from basic_pitch import ICASSP_2022_MODEL_PATH
 STEM = sys.argv[1]
 OUTDIR = sys.argv[2]
 PREFIX = sys.argv[3]
+MERGE_GAP = float(sys.argv[4]) if len(sys.argv) > 4 else 0.0  # merge held same-pitch slices within this gap (s)
 
 info = sf.info(STEM)
 SR = info.samplerate
@@ -27,15 +28,26 @@ _, _, notes = predict(STEM, ICASSP_2022_MODEL_PATH, onset_threshold=0.5, frame_t
                       minimum_note_length=80, minimum_frequency=80, maximum_frequency=2000)
 ev = sorted([(float(n[0]), float(n[1]), int(n[2]), float(n[3])) for n in notes], key=lambda x: x[0])
 
-# thin near-simultaneous detections (a harmonic + fundamental at the same instant would
-# play two copies of the same audio chunk = doubling). Keep the louder.
-clean = []
+# thin near-simultaneous detections (harmonic + fundamental at the same instant = doubling).
+thinned = []
 for s, e, p, a in ev:
-    if clean and s - clean[-1][0] < 0.04:
-        if a > clean[-1][3]:
-            clean[-1] = (s, e, p, a)
+    if thinned and s - thinned[-1][0] < 0.04:
+        if a > thinned[-1][3]:
+            thinned[-1] = (s, e, p, a)
+    else:
+        thinned.append((s, e, p, a))
+
+# merge consecutive SAME-pitch slices within MERGE_GAP of each other (a HELD note the transcriber
+# re-triggered) into ONE long chunk -> sustained notes keep their body instead of being chopped
+# into dipping slivers (which makes them sound thinner/quieter when exposed without the kick).
+clean = []
+prev_s = prev_p = -1
+for s, e, p, a in thinned:
+    if clean and p == prev_p and (s - prev_s) < MERGE_GAP:
+        clean[-1] = (clean[-1][0], max(clean[-1][1], e), p, max(clean[-1][3], a))
     else:
         clean.append((s, e, p, a))
+    prev_s, prev_p = s, p
 
 # snap each chunk boundary to a zero-crossing so chunks start/end at amplitude 0 -> no pops.
 # boundary[i] is shared as end of chunk i-1 and start of chunk i, keeping them contiguous.

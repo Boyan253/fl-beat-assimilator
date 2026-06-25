@@ -26,8 +26,8 @@ os.makedirs(OUTDIR, exist_ok=True)
 
 # stem -> (layer label, engine script, default pitch for the engine)
 ROUTING = [
-    ("other.wav",  "melody", "build_perocc.py",       None),
-    ("vocals.wav", "vocals", "build_perocc.py",       None),
+    ("other.wav",  "melody", "build_perocc.py",       "0.2"),
+    ("vocals.wav", "vocals", "build_perocc.py",       "0.2"),
     ("bass.wav",   "bass",   "build_perocc_onset.py", "36"),
     ("drums.wav",  "drums",  "build_perocc_onset.py", "38"),
 ]
@@ -79,6 +79,15 @@ for stem, layer, engine, defp in ROUTING:
     if not os.path.exists(wav):
         print("!! render failed for %s" % layer, flush=True)
         continue
+    # loudness-match: per-occurrence renders are quieter than the stem (envelope dips on each
+    # chunk). Bake a gain into the SFZ: RMS-match for sustained content, capped by peak so
+    # transient bass/drums don't clip.
+    sy, _ = librosa.load(src, sr=None, mono=True); ry, _ = librosa.load(wav, sr=None, mono=True)
+    s_rms = float(np.sqrt(np.mean(sy ** 2))); r_rms = float(np.sqrt(np.mean(ry ** 2))); r_pk = float(np.max(np.abs(ry)))
+    if r_rms > 0 and r_pk > 0:
+        gdb = 20.0 * np.log10(min(s_rms / r_rms, 0.99 / r_pk))
+        _t = open(sfz).read().split("\n"); _t[1] += " volume=%.1f" % gdb; open(sfz, "w").write("\n".join(_t))
+        print("   %s loudness-matched: %+.1f dB" % (layer, gdb))
     cs, rs = feats(src); cr, rr = feats(wav)
     results.append((layer, corr(cs, cr), corr(rs, rr), prefix))
 
