@@ -75,6 +75,23 @@ Once a winner is confirmed (likely **CREPE for monophonic leads**):
   clears the bar — and **report per-stem** so we route mono→best-transcriber, poly→faithful.
 - Commit `bench_transcribe.py` + `results.md`; update this file with the chosen model.
 
+## ✅ RESULTS (measured 2026-06-25 on 7900 XTX — `bench_transcribe.py` → `results.md`)
+Built the benchmark exactly as specced (4 synthetic GT MIDIs × 2 GM timbres via fluidsynth,
+scored with `mir_eval`). Tested CREPE (torchcrepe, GPU) vs Basic Pitch vs pYIN.
+
+**Monophonic avg — Onset+Pitch F1:** Basic Pitch **83.2%** · CREPE **81.6%** · pYIN 49.6%.
+But CREPE wins where it matters: **Onset F1 92.1%** (vs 83.7%) and **+Offset F1 38.7%** (vs 9.3% —
+Basic Pitch badly over-sustains). On **clean single timbres CREPE hits 95–98%** (e-piano lead 95.8%,
+bass 96–98%); it only loses average points to **octave errors on bright/saw leads** (rich harmonics).
+**Polyphonic:** only Basic Pitch produces anything (64.3%); CREPE/pYIN are mono-only (0%).
+
+**Revised recommendation (data-backed):** the MEASURE.md hypothesis was *half* right.
+- The real best for mono is a **CREPE+Basic Pitch hybrid** — Basic Pitch onset robustness + CREPE
+  pitch & note-length. Route **per stem**: clean mono → that hybrid (95–98%); poly → Basic Pitch.
+- **Blind octave-correction is a trap** — it flattens legitimate wide melodic leaps (tried it: CREPE
+  81.6%→67.4%). Only correct octaves with a real melodic-continuity model, not a local median.
+- ~99% on NOTES is reachable **only** on isolated clean monophonic layers; full polyphonic ~65–90%.
+
 ## Honest ceiling
 Even the best model is near-perfect only on **clean monophonic** material. Polyphonic/layered
 melodies remain approximate — that's the open MP3→MIDI problem, not a tooling gap. The win
