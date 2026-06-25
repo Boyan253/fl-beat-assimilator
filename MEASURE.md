@@ -92,6 +92,26 @@ bass 96–98%); it only loses average points to **octave errors on bright/saw le
   81.6%→67.4%). Only correct octaves with a real melodic-continuity model, not a local median.
 - ~99% on NOTES is reachable **only** on isolated clean monophonic layers; full polyphonic ~65–90%.
 
+## ✅ FOLLOW-UP: YourMT3 (2025 SOTA) beats Basic Pitch on melody (`bench_melody.py`)
+Researched the field — 2025 AMT Challenge: only 2 teams beat Google MT3; winner = **YourMT3+**.
+It's **PyTorch**, so it runs on the 7900 XTX (MT3 itself is JAX/T5X = painful). Installed via the
+`mt3-infer` toolkit and benchmarked head-to-head vs Basic Pitch on synthetic GT:
+
+- **Polyphonic melody (the real case): YourMT3 70.2% vs BP 64.3%** onset+pitch; timing **87.8% vs 64.3%**;
+  note-ratio **1.00 vs 2.33** (BP massively over-segments). On MIRAGE melody: **734 clean notes vs BP's 1509**.
+- **Realistic timbre (e-piano): YourMT3 96.8% vs BP 90.6%.**
+- **Only loss:** raw GM sawtooth synth (octave errors, 28% vs 85%) — artificial; not a real phonk sound.
+- **Decision: route the MELODY note-source to YourMT3** (cleaner + more accurate on realistic/poly material);
+  keep Basic Pitch as fast fallback; CREPE stays the **bass/808** specialist (96–98%).
+
+### Repro / install notes (7900 XTX, flbeat-venv)
+- `pip install mt3-infer torchcrepe pytorch_lightning` (uses existing ROCm torch — verified not clobbered).
+- **Pin `transformers==4.40.2`** — YourMT3 needs the old `model_parallel_utils` / `find_pruneable_heads`
+  APIs that transformers 5.x removed. (Basic Pitch doesn't use transformers, so the pin is safe.)
+- git-lfs is NOT installed on the box (shared machine) — fetch the YourMT3 ckpt with
+  `huggingface_hub.hf_hub_download(repo_id="mimbres/YourMT3", repo_type="space", filename=...last.ckpt)`.
+- `run_mt3.py` injects a tiny `model_parallel_utils` shim too (belt-and-suspenders).
+
 ## Honest ceiling
 Even the best model is near-perfect only on **clean monophonic** material. Polyphonic/layered
 melodies remain approximate — that's the open MP3→MIDI problem, not a tooling gap. The win
