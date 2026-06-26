@@ -8,8 +8,10 @@ export LD_LIBRARY_PATH=/opt/rocm/lib HSA_ENABLE_SDMA=0 GPU_MAX_HW_QUEUES=1 \
        MIOPEN_FIND_MODE=2 MIOPEN_DEBUG_CONV_IMMED_FALLBACK=1
 source /opt/aceenv/bin/activate
 cd /mnt/d/flbeat/ACE-Step-1.5
-echo "### 1/3 song (XL-SFT ${DUR}s) ###"
-python -u gen_sft_test.py "$SP" "${SAFE}_raw" 32 "$BPM" "$DUR" || exit 1
+# pick model by duration: XL-SFT (full quality) maxes ~60s on 24GB; turbo handles longer.
+if [ "$DUR" -gt 60 ]; then STEPS=8; MODEL=acestep-v15-turbo; else STEPS=32; MODEL=acestep-v15-xl-sft; fi
+echo "### 1/3 song (${MODEL} ${STEPS} steps, ${DUR}s) ###"
+python -u gen_sft_test.py "$SP" "${SAFE}_raw" "$STEPS" "$BPM" "$DUR" "$MODEL" || exit 1
 echo "### 2/3 grit ###"
 python -u /mnt/d/flbeat/fl-beat-assimilator/phonkify.py "$G/${SAFE}_raw.wav" "$G/${SAFE}_GRIT.wav" 1.1
 echo "### 3/3 cover + video (SDXL, fresh process) ###"
