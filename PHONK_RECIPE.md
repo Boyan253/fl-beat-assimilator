@@ -56,8 +56,17 @@ MIOPEN_FIND_MODE=2  MIOPEN_DEBUG_CONV_IMMED_FALLBACK=1
 ```
 Do NOT set HSA_OVERRIDE_GFX_VERSION (WSL libhsakmt abort). venvs: `/opt/aceenv` (gen), `/root/flbeat-venv` (analysis).
 
-## Stems -> MIDI / FL pack (for editing tracks)
-- Melody transcription: **YourMT3** (`run_mt3.py`) — best on polyphonic; needs `transformers==4.40.2`.
-- Bass/808: **CREPE** (torchcrepe). Drums: **MDX23C-DrumSep** via `audio-separator` (kick/snare/hh/toms/ride/crash).
-- `assemble_mirage_fl.py` -> 4-folder FL pack (SFZ instruments, editable MIDI, drum samples, one-shots).
+## Stems -> MIDI / FL pack (for editing tracks)  — one command: `make_fl_pack.py <track.wav> <NAME> <bpm>`
+- **SEPARATION (the big lever): use `htdemucs_6s`, NOT htdemucs_ft.** 6s splits piano+guitar out
+  separately, so the melody stem is MUCH cleaner — measured on GRIM: 3x less bass bleed + ~half the
+  drum bleed (user: "90% better, almost no bass"). Melody = **6s `other` + `piano`** combined, then a
+  gentle 100 Hz high-pass for the last bit of sub-bass. htdemucs_ft dumps everything in one "other"
+  stem = faded/smeared melody where bass overlaps. **Always separate the RAW (pre-grit) track** —
+  the `phonkify` grit smears the mix and ruins separation.
+- Melody transcription: **YourMT3** (`run_mt3.py`, run from /mnt/d/flbeat so it finds the ckpt) — needs `transformers==4.40.2`.
+- Bass/808: basic_pitch (or CREPE). Drums: **MDX23C-DrumSep** via `audio-separator` (kick/snare/hh/toms/ride/crash).
+- make_fl_pack builds a 4-folder pack: SFZ instruments (play real audio), editable MIDI, drum samples, one-shots.
+  SFZ sample paths are relative basenames matching the copied wav (must match or Sforzando = "no asset").
+- True 1:1 faithful playback (not editable): `make_stemplayer_pack.py` (each SFZ plays the whole stem).
+- Clean melody with the song's own timbre: `render_melody_with_oneshot.py` (one clean note + the MIDI).
 - Benchmark/details: `MEASURE.md`, `results.md`.
